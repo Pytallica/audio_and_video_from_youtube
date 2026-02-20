@@ -3,12 +3,12 @@ import asyncio
 
 from aiogram import Dispatcher
 from audio import db, bot, logger
-from handlers import bot as bot_handlers
+from handlers import router as bot_handlers
 
 dp = Dispatcher()
 
 async def main():
-    dp.include_router(bot_handlers.router)
+    dp.include_router(bot_handlers)
 
     logger.info("Бот запущен!")
     try:    

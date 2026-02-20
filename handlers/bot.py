@@ -1,4 +1,5 @@
 import logging
+from typing import Any
 from aiogram import Router, F, types
 from aiogram.exceptions import TelegramForbiddenError
 from aiogram.filters import Command
@@ -15,21 +16,32 @@ logger = logging.getLogger(__name__)
 router = Router()
 
 @router.message(Command("health"))
-async def healthcheck(message: types.Message):
+async def healthcheck(message: types.Message) -> None:
     try:
         await message.answer("Бот работает.")
     except TelegramForbiddenError:
-        logger.warning(f"Bot is blocked by user {message.from_user.id}.")
+        from_user = message.from_user
+        if from_user is not None:
+            logger.warning(f"Bot is blocked by user {from_user.id}.")
+        else:
+            logger.warning("Bot is blocked by an unknown user.")
 
 
 @router.message(Command("locks"))
-async def list_locks(message: types.Message):
-    user_id = message.from_user.id
+async def list_locks(message: types.Message) -> None:
+    from_user = message.from_user
+    if from_user is None:
+        logger.error("User information not available in message for list_locks.")
+        return
+    user_id = from_user.id
     if user_id != ADMIN_USER_ID:
         try:
             await message.answer("Нет доступа.")
         except TelegramForbiddenError:
-            logger.warning(f"Bot is blocked by user {user_id}.")
+            if from_user is not None:
+                logger.warning(f"Bot is blocked by user {from_user.id}.")
+            else:
+                logger.warning("Bot is blocked by an unknown user.")
         return
 
     try:
@@ -43,33 +55,54 @@ async def list_locks(message: types.Message):
 
 
 @router.message(Command("check_subscription"))
-async def check_subscription_command(message: types.Message):
-    user_id = message.from_user.id
+async def check_subscription_command(message: types.Message) -> None:
+    from_user = message.from_user
+    if from_user is None:
+        logger.error("User information not available in message for check_subscription_command.")
+        return
+    user_id = from_user.id
     try:
         if await is_user_subscribed(user_id):
             await message.answer("Вы подписаны на все каналы! Теперь вы можете скачивать видео.")
         else:
             await send_subscription_request(message.chat.id)
     except TelegramForbiddenError:
-        logger.warning(f"Bot is blocked by user {user_id}. Cannot process check_subscription command.")
+        if from_user is not None:
+            logger.warning(f"Bot is blocked by user {from_user.id}. Cannot process check_subscription command.")
+        else:
+            logger.warning("Bot is blocked by an unknown user. Cannot process check_subscription command.")
           
 
 @router.callback_query(F.data == "check_subscription_callback")
-async def check_subscription_callback_handler(callback: types.CallbackQuery):
-    user_id = callback.from_user.id
+async def check_subscription_callback_handler(callback: types.CallbackQuery) -> None:
+    from_user = callback.from_user
+    if from_user is None:
+        logger.error("User information not available in callback for check_subscription_callback_handler.")
+        return
+    user_id = from_user.id
     try:
         if await is_user_subscribed(user_id):
-            await callback.message.edit_text("Подписка подтверждена! Теперь вы можете скачивать видео.")
+            if callback.message and isinstance(callback.message, types.Message):
+                await callback.message.edit_text("Подписка подтверждена! Теперь вы можете скачивать видео.")
+            else:
+                await callback.answer("Подписка подтверждена!", show_alert=True)
             await callback.answer()
         else:
             await callback.answer("Вы ещё не подписались на все каналы!", show_alert=True)
     except TelegramForbiddenError:
-        logger.warning(f"Bot is blocked by user {user_id}. Cannot process subscription callback.")
+        if from_user is not None:
+            logger.warning(f"Bot is blocked by user {from_user.id}. Cannot process subscription callback.")
+        else:
+            logger.warning("Bot is blocked by an unknown user. Cannot process subscription callback.")
 
 
 @router.message(Command("start"))
-async def start_command(message: types.Message):
-    user_id = message.from_user.id
+async def start_command(message: types.Message) -> None:
+    from_user = message.from_user
+    if from_user is None:
+        logger.error("User information not available in message for start_command.")
+        return
+    user_id = from_user.id
     try:
         if not await ensure_user_exists(message):
             return
@@ -78,14 +111,24 @@ async def start_command(message: types.Message):
             await send_subscription_request(message.chat.id)
             return
 
-        await message.answer(f"Привет, {message.from_user.first_name}! Отправь ссылку на видео или аудио.")
+        if from_user is not None:
+            await message.answer(f"Привет, {from_user.first_name}! Отправь ссылку на видео или аудио.")
+        else:
+            await message.answer("Привет! Отправь ссылку на видео или аудио.")
     except TelegramForbiddenError:
-        logger.warning(f"Bot is blocked by user {user_id}. Cannot process start command.")
+        if from_user is not None:
+            logger.warning(f"Bot is blocked by user {from_user.id}. Cannot process start command.")
+        else:
+            logger.warning("Bot is blocked by an unknown user. Cannot process start command.")
 
 
 @router.message(F.text.regexp(r'https?://(?:www\.?youtube\.com/watch\?v=|youtu\.be/)["\w\-]+'))
-async def handle_video_link(message: types.Message, state: FSMContext):
-    user_id = message.from_user.id
+async def handle_video_link(message: types.Message, state: FSMContext) -> None:
+    from_user = message.from_user
+    if from_user is None:
+        logger.error("User information not available in message for handle_video_link.")
+        return
+    user_id = from_user.id
     try:
         await message.answer("Пожалуйста подождите")
 
@@ -97,11 +140,13 @@ async def handle_video_link(message: types.Message, state: FSMContext):
         await state.set_state(DownloadState.waiting_for_format)
         await state.update_data(last_url=message.text)
 
-        cached_sizes = {}
+        cached_sizes: dict[tuple[str, str], float] = {}
 
         response = "Выберите качество:\n\n"
-        for format_key, format_info in FORMATS.items():
+        for format_key, format_info_obj in FORMATS.items(): # Переименовал format_info в format_info_obj
+            assert message.text is not None # Гарантируем, что message.text не None
             key = (message.text, format_key)
+            format_info: dict[str, Any] = format_info_obj # type: ignore[assignment] # Явно указываем тип
             try:
                 if key in cached_sizes:
                     size = cached_sizes[key]
@@ -110,7 +155,7 @@ async def handle_video_link(message: types.Message, state: FSMContext):
                     cached_sizes[key] = size
 
                 if size > 0:
-                    size_str = format_size(size)
+                    size_str = format_size(int(size))
                     response += f"/{format_key} - {size_str}\n"
                 else:
                     response += f"/{format_key}\n"
@@ -124,13 +169,21 @@ async def handle_video_link(message: types.Message, state: FSMContext):
 
         await message.answer(response, reply_markup=builder.as_markup(resize_keyboard=True))
     except TelegramForbiddenError:
-        logger.warning(f"Bot is blocked by user {user_id}. Cannot process video link.")
+        if from_user is not None:
+            logger.warning(f"Bot is blocked by user {from_user.id}. Cannot process video link.")
+        else:
+            logger.warning("Bot is blocked by an unknown user. Cannot process video link.")
 
 
 @router.message(Command(*FORMATS.keys()))
-async def handle_format_command(message: types.Message, state: FSMContext):
-    user_id = message.from_user.id
+async def handle_format_command(message: types.Message, state: FSMContext) -> None:
+    from_user = message.from_user
+    if from_user is None:
+        logger.error("User information not available in message for handle_format_command.")
+        return
+    user_id = from_user.id
     try:
+        assert message.text is not None
         format_key = message.text[1:]
         if format_key not in FORMATS:
             await message.answer("Неверный формат.")
@@ -147,4 +200,7 @@ async def handle_format_command(message: types.Message, state: FSMContext):
 
         await state.clear()
     except TelegramForbiddenError:
-        logger.warning(f"Bot is blocked by user {user_id}, download process aborted.")
+        if from_user is not None:
+            logger.warning(f"Bot is blocked by user {from_user.id}, download process aborted.")
+        else:
+            logger.warning("Bot is blocked by an unknown user, download process aborted.")

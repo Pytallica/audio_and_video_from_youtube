@@ -11,7 +11,7 @@ import logging
 
 OUTPUT_FILE = 'www.youtube.com_cookies.txt'
 
-def export_youtube_cookies_to_txt():
+def export_youtube_cookies_to_txt() -> bool:
     """
     Extracts YouTube cookies from Chrome and saves them to a Netscape-formatted
     text file.

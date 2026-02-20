@@ -32,7 +32,6 @@ jobs:
         STORAGE_PRIVATE_KEY_PATH=${{ secrets.STORAGE_PRIVATE_KEY_PATH }}
         STORAGE_PUBLIC_URL_PREFIX=${{ secrets.STORAGE_PUBLIC_URL_PREFIX }}
         SSH_KEY_HOST_PATH=${{ secrets.STORAGE_KEY_SERVER_PATH }}
-        STORAGE_PATH=${{ secrets.STORAGE_PATH }}
         EOF
         echo ".env file created locally."
 
@@ -74,11 +73,25 @@ jobs:
         script: |
           set -e
           cd ${{ secrets.DEPLOY_PATH }}
+          
+          echo "Creating SSH key file for storage access..."
+          SSH_KEY_PATH_ON_SERVER="${{ secrets.STORAGE_KEY_SERVER_PATH }}"
+          
+          # Ensure the target directory for the key exists
+          SSH_KEY_DIR=$(dirname -- "$SSH_KEY_PATH_ON_SERVER")
+          echo "Creating directory for SSH key: $SSH_KEY_DIR"
+          mkdir -p -- "$SSH_KEY_DIR"
+          
+          # Create the key file
+          echo "Writing SSH private key to $SSH_KEY_PATH_ON_SERVER"
+          echo "${{ secrets.STORAGE_SSH_PRIVATE_KEY }}" > "$SSH_KEY_PATH_ON_SERVER"
+          chmod 600 -- "$SSH_KEY_PATH_ON_SERVER"
+          echo "SSH key file created and permissions set."
 
           echo "Ensuring www.youtube.com_cookies.txt exists..."
           rm -f www.youtube.com_cookies.txt
           touch www.youtube.com_cookies.txt
           
-          echo "Running deployment commands..."
+          echo "Running deployment commands..."/home/mylendad/.ssh/id_ed25519
           ${{ secrets.DEPLOY_COMMANDS }}
           echo "Deployment finished."

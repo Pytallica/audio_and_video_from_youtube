@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Optional, Dict, Any
-from clients.pg_client import AsyncPostgresClient
+from .pg_client import AsyncPostgresClient
 
 import logging
 

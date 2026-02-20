@@ -1,11 +1,11 @@
 import os
 import time
 
-import asyncpg
+import asyncpg # type: ignore[import-untyped]
 import docker
 import pytest
-import pytest_asyncio
-from clients.pg_client import AsyncPostgresClient
+import pytest_asyncio # type: ignore[import-not-found]
+from clients import AsyncPostgresClient, AsyncUserActioner
 
 POSTGRES_IMAGE = "postgres:15"
 POSTGRES_USER = "test_user"
@@ -71,6 +71,4 @@ async def db(docker_postgres):
 
 @pytest_asyncio.fixture()
 async def actioner(db):
-    from clients.async_user_actioner import AsyncUserActioner
-
     return AsyncUserActioner(db)

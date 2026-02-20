@@ -1,20 +1,20 @@
-# FROM python:3.12-slim-buster
-FROM python:3.12
+FROM python:3.12-slim
 
 WORKDIR /app
 
-RUN pip install --no-cache-dir setuptools wheel
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ffmpeg && \
+    rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml .
+RUN pip install --no-cache-dir setuptools wheel && \
+    pip install --no-cache-dir --timeout=300 .
 
-RUN pip install --timeout=300 .
-
-RUN apt-get update && apt-get install -y ffmpeg
+RUN useradd -u 10001 -m appuser
 
 COPY . .
-
-RUN useradd -m appuser
 RUN chown -R appuser:appuser /app
+
 USER appuser
 
 CMD ["python", "main.py"]

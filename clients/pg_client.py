@@ -1,5 +1,5 @@
 from asyncpg import Pool
-import asyncpg
+import asyncpg # type: ignore[import-untyped]
 
 import asyncio
 import logging
@@ -35,18 +35,20 @@ class AsyncPostgresClient:
                 delay *= 2
         raise ConnectionError("Failed to connect to Postgres after retries")
 
-    async def init_db(self):
+    async def init_db(self) -> None:
         await self.execute(CREATE_QUERY, ())
 
-    async def close(self):
+    async def close(self) -> None:
         if self.pool:
             await self.pool.close()
 
     async def fetch(self, query: str, params: Tuple[Any, ...]) -> List[asyncpg.Record]:
+        assert self.pool is not None
         async with self.pool.acquire() as conn:
             return await conn.fetch(query, *params)
 
     async def execute(self, query: str, params: Tuple[Any, ...]) -> None:
+        assert self.pool is not None
         async with self.pool.acquire() as conn:
             await conn.execute(query, *params)
 

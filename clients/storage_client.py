@@ -1,4 +1,4 @@
-import asyncssh
+import asyncssh # type: ignore[import-not-found]
 import os
 from urllib.parse import urljoin
 import logging

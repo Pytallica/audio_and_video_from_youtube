@@ -6,6 +6,10 @@ from datetime import datetime, timezone
 from lib import browser_cookie3
 import logging
 import mimetypes
+from typing import Any, cast
+from urllib.parse import urlparse 
+from ipaddress import ip_address, IPv4Address, IPv6Address, AddressValueError
+
 # import aiohttp
 
 from aiogram import Bot, F, types
@@ -17,18 +21,16 @@ from aiogram.utils.keyboard import ReplyKeyboardBuilder
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.types import URLInputFile
 import glob
-
+ 
 from web_server import public_file_server
 from yt_dlp import YoutubeDL
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
-from googleapiclient.errors import HttpError
+from googleapiclient.discovery import build # type: ignore[import-untyped]
+from googleapiclient.http import MediaFileUpload # type: ignore[import-untyped]
+from googleapiclient.errors import HttpError # type: ignore[import-untyped]
 from generate_cookies import export_youtube_cookies_to_txt
 
 from redis_lock import acquire_user_lock, release_user_lock
-from clients.async_user_actioner import AsyncUserActioner
-from clients.pg_client import AsyncPostgresClient
-from clients.storage_client import storage_client
+from clients import AsyncUserActioner, AsyncPostgresClient, storage_client
 
 from config import TOKEN, ADMIN_CHAT_ID, ADMIN_USER_ID, DB_DSN, REQUIRED_CHANNELS, COOKIE_FILE
 from constants import FORMATS
@@ -81,40 +83,83 @@ def format_size(size_bytes: int) -> str:
 
 
 def is_youtube_url(url: str) -> bool:
-    """Checks if the given URL is a valid YouTube URL."""
+    """Проверяет, является ли URL действительным YouTube-URL и предотвращает попытки SSRF."""
     youtube_regex = (
         r'(https?://)?(www\.)?'
         r'(youtube|youtu|youtube-nocookie)\.(com|be)/'
         r'(watch\?v=|embed/|v/|.+\?v=)?([^&=%\?]{11})')
-    return re.match(youtube_regex, url) is not None
+    
+    if not re.match(youtube_regex, url):
+        return False
 
-async def estimate_video_size(url: str, format_config: dict) -> int:
+    parsed_url = urlparse(url)
+
+    # Запрещаем схему file://
+    if parsed_url.scheme == 'file':
+        logger.warning(f"Попытка SSRF обнаружена: схема file:// в URL {url}")
+        return False
+
+    # Проверяем, является ли хост IP-адресом
+    try:
+        # Пытаемся преобразовать hostname в IP-адрес
+        hostname_ip = ip_address(parsed_url.hostname)
+        
+        # Запрещаем приватные IP-адреса (RFC 1918)
+        if hostname_ip.is_private:
+            logger.warning(f"Попытка SSRF обнаружена: приватный IP-адрес {parsed_url.hostname} в URL {url}")
+            return False
+        # Запрещаем loopback-адреса (127.0.0.1)
+        if hostname_ip.is_loopback:
+            logger.warning(f"Попытка SSRF обнаружена: loopback IP-адрес {parsed_url.hostname} в URL {url}")
+            return False
+        # Запрещаем IP-адрес метаданных облака
+        if str(hostname_ip) == "169.254.169.254":
+            logger.warning(f"Попытка SSRF обнаружена: IP-адрес метаданных облака {parsed_url.hostname} в URL {url}")
+            return False
+    except (ValueError, AddressValueError):
+        # Если hostname не является IP-адресом, продолжаем. Это ожидаемое поведение для доменных имен.
+        pass
+    except AttributeError:
+        # hostname может быть None для некоторых некорректных URL, в этом случае пусть обрабатывает оригинальное регулярное выражение.
+        pass
+
+    return True
+
+DOWNLOAD_TIMEOUT_SECONDS = 600 # 10 минут на скачивание/извлечение информации
+
+async def estimate_video_size(url: str, format_config: dict) -> float:
     ydl_opts = {
         'quiet': True,
         'simulate': True,
-        'format': format_config['format'],
+        'format': format_config['format'], # type: ignore[index]
         'cookiefile': COOKIE_FILE,
         'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'restrictfilenames': True, # Ограничение имен файлов
     }
     
     if 'postprocessors' in format_config:
         ydl_opts['postprocessors'] = format_config['postprocessors']
 
+    info: dict[str, Any] = {}
     try:
-        with YoutubeDL(ydl_opts) as ydl:
-            info = await asyncio.to_thread(ydl.extract_info, url, download=False)
+        async with asyncio.timeout(DOWNLOAD_TIMEOUT_SECONDS): # Устанавливаем таймаут
+            with YoutubeDL(ydl_opts) as ydl: # type: ignore
+                info = await asyncio.to_thread(ydl.extract_info, url, download=False) # type: ignore
             
             if 'requested_downloads' in info and info['requested_downloads']:
                 filesize = info['requested_downloads'][0].get('filesize')
                 if filesize:
                     return filesize
                     
-            tbr = info.get('tbr') or 0
-            duration = info.get('duration') or 1
+            tbr: float = info.get('tbr') or 0.0 # type: ignore[assignment]
+            duration: float = info.get('duration') or 1.0 # type: ignore[assignment]
             
             estimated_size = (tbr * 1000 * duration) / 8
-            return int(estimated_size)
+            return estimated_size
             
+    except asyncio.TimeoutError:
+        logger.error(f"Таймаут операции оценки размера для URL: {url}")
+        return 0
     except Exception as e:
         logger.error(f"Ошибка оценки размера: {e}")
         return 0
@@ -158,15 +203,26 @@ async def send_subscription_request(chat_id: int):
 
 
 async def ensure_user_exists(message_or_query: types.Message | types.CallbackQuery) -> bool:
-    user_id = message_or_query.from_user.id
+    from_user = message_or_query.from_user
+    if from_user is None:
+        logger.error("User information not available.")
+        return False
+    user_id = from_user.id
     user = await user_actioner.get_user(user_id)
     
     if user is not None:
         return True
         
     if await is_user_subscribed(user_id):
-        username = message_or_query.from_user.username or ""
-        chat_id = message_or_query.message.chat.id if isinstance(message_or_query, types.CallbackQuery) else message_or_query.chat.id
+        username = from_user.username or ""
+        chat_id: int
+        if isinstance(message_or_query, types.CallbackQuery):
+            if message_or_query.message is None:
+                logger.error("Message not available in CallbackQuery.")
+                return False
+            chat_id = message_or_query.message.chat.id
+        else:
+            chat_id = message_or_query.chat.id
         now = datetime.now(timezone.utc)
         
         try:
@@ -177,8 +233,12 @@ async def ensure_user_exists(message_or_query: types.Message | types.CallbackQue
             logger.error(f"Ошибка авторегистрации {user_id}: {e}")
 
     if isinstance(message_or_query, types.CallbackQuery):
-        await message_or_query.message.answer("Для использования бота:\n1. Подпишитесь на каналы\n2. Нажмите /start")
-    else:
+        if message_or_query.message is not None:
+            await message_or_query.message.answer("Для использования бота:\n1. Подпишитесь на каналы\n2. Нажмите /start")
+        else:
+            logger.warning("Cannot answer callback query without a message.")
+            await message_or_query.answer("Для использования бота:\n1. Подпишитесь на каналы\n2. Нажмите /start", show_alert=True)
+    else: 
         await message_or_query.answer("Для использования бота:\n1. Подпишитесь на каналы\n2. Нажмите /start")
         
     return False
@@ -195,9 +255,11 @@ async def is_user_subscribed(user_id: int) -> bool:
             continue  # Skip any empty entries in the list
 
         try:
-            member = await bot.get_chat_member(chat_id=channel_name, user_id=user_id)
-            if member.status not in ("member", "administrator", "creator"):
-                return False
+            async with asyncio.timeout(10):  # 10 секунд таймаут
+                member = await bot.get_chat_member(chat_id=channel_name, user_id=user_id)
+        except asyncio.TimeoutError:
+            logger.warning(f"Таймаут при проверке канала {channel_name}")
+            return False
         except Exception as e:
             logger.warning(f"Ошибка при проверке подписки на {channel_name}: {e}")
             # If we can't check one channel, we assume failure for security.
@@ -205,7 +267,11 @@ async def is_user_subscribed(user_id: int) -> bool:
     return True
 
 async def process_download(message: types.Message, format_key: str, state: FSMContext):
-    user_id = message.from_user.id
+    from_user = message.from_user
+    if from_user is None:
+        logger.error("User information not available in message for process_download.")
+        return
+    user_id = from_user.id
     chat_id = message.chat.id
 
     if not await ensure_user_exists(message):
@@ -290,27 +356,31 @@ async def process_download(message: types.Message, format_key: str, state: FSMCo
         'cookiefile': COOKIE_FILE,
         'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'progress_hooks': [progress_hook],
+        'restrictfilenames': True, # Ограничение имен файлов
     }
 
-    if 'postprocessors' in format_config:
-        ydl_opts['postprocessors'] = format_config['postprocessors']
+    if 'postprocessors' in format_config: # type: ignore[operator]
+        ydl_opts['postprocessors'] = format_config['postprocessors'] # type: ignore[index]
         ydl_opts['keepvideo'] = True  
 
+    info: dict[str, Any] = {} # Объявляем info здесь
     try:
         logger.info(f"Начало обработки: {url}")
         logger.info(f"Формат: {format_key}")
         logger.info(f"Параметры: {format_config}")
         
-        with YoutubeDL(ydl_opts) as ydl:
-            info = await asyncio.to_thread(ydl.extract_info, url)
-            url = None
-            logger.info(f"Информация о видео: {info.get('title')}")
+        async with asyncio.timeout(DOWNLOAD_TIMEOUT_SECONDS): # Устанавливаем таймаут
+            with YoutubeDL(ydl_opts) as ydl: # type: ignore
+                info = cast(dict[str, Any], await asyncio.to_thread(ydl.extract_info, url))
+
+        # url = None # Удаляем эту строку
+        logger.info(f"Информация о видео: {info.get('title')}")
             logger.info(f"Расширение: {info.get('ext')}")
-            if 'requested_downloads' in info and info['requested_downloads']:
+            if 'requested_downloads' in info and info['requested_downloads']: # type: ignore[index]
                 logger.info(f"Запрошенные загрузки: {info['requested_downloads'][0]}")
 
-            if 'postprocessors' in format_config:
-                ext = format_config['extension']
+            if 'postprocessors' in format_config: # type: ignore[operator]
+                ext = format_config['extension'] # type: ignore[index]
                 final_path = f"{base_filename}.{ext}"
                 
                 for i in range(15):
@@ -354,9 +424,9 @@ async def process_download(message: types.Message, format_key: str, state: FSMCo
         if file_size <= MAX_FILE_SIZE:
             logger.info("Файл меньше 50 МБ, отправка напрямую.")
             fs_file = types.FSInputFile(final_path)
-            if format_config['send_method'] == 'send_audio':
+            if format_config['send_method'] == 'send_audio': # type: ignore[index]
                 await message.answer_audio(fs_file)
-            elif format_config['send_method'] == 'send_video':
+            elif format_config['send_method'] == 'send_video': # type: ignore[index]
                 await message.answer_video(fs_file)
             else:
                 await message.answer_document(fs_file)

@@ -20,11 +20,11 @@ from typing import Dict, List, Union
 
 if sys.platform.startswith('linux') or 'bsd' in sys.platform.lower():
     try:
-        import jeepney
-        from jeepney.io.blocking import open_dbus_connection
+        import jeepney # type: ignore[import-untyped]
+        from jeepney.io.blocking import open_dbus_connection # type: ignore[import-untyped]
         USE_DBUS_LINUX = False
     except ImportError:
-        import dbus
+        import dbus # type: ignore[import-not-found]
         USE_DBUS_LINUX = True
 
 
@@ -37,10 +37,10 @@ if sys.platform == 'win32':
 
 
 # external dependencies
-import lz4.block
-from Cryptodome.Cipher import AES
-from Cryptodome.Protocol.KDF import PBKDF2
-from Cryptodome.Util.Padding import unpad
+import lz4.block # type: ignore[import-untyped]
+from Cryptodome.Cipher import AES # type: ignore[import-untyped]
+from Cryptodome.Protocol.KDF import PBKDF2 # type: ignore[import-untyped]
+from Cryptodome.Util.Padding import unpad # type: ignore[import-untyped]
 
 __doc__ = 'Load browser cookies into a cookiejar'
 
@@ -137,9 +137,9 @@ def _expand_paths_impl(paths: list, os_name: str):
         paths = [paths]
 
     if os_name == 'windows':
-        paths = map(_expand_win_path, paths)
+        paths = map(_expand_win_path, paths) # type: ignore[assignment]
     else:
-        paths = map(os.path.expanduser, paths)
+        paths = map(os.path.expanduser, paths) # type: ignore[assignment]
 
     for path in paths:
         # glob will return results in arbitrary order. sorted() is use to make output predictable.
@@ -154,7 +154,7 @@ def _expand_paths(paths: list, os_name: str):
 
 
 def _normalize_genarate_paths_chromium(paths: Union[str, list], channel: Union[str, list] = None):
-    channel = channel or ['']
+    channel = channel or [''] # type: ignore[assignment] # type: ignore[assignment] # type: ignore[assignment] # type: ignore[assignment] # type: ignore[assignment]
     if not isinstance(channel, list):
         channel = [channel]
     if not isinstance(paths, list):
@@ -163,9 +163,7 @@ def _normalize_genarate_paths_chromium(paths: Union[str, list], channel: Union[s
 
 
 def _genarate_nix_paths_chromium(paths: Union[str, list], channel: Union[str, list] = None):
-    """Generate paths for chromium based browsers on *nix systems."""
-
-    paths, channel = _normalize_genarate_paths_chromium(paths, channel)
+    paths, channel = _normalize_genarate_paths_chromium(paths, channel) # type: ignore[arg-type]
     genararated_paths = []
     for chan in channel:
         for path in paths:
@@ -176,7 +174,7 @@ def _genarate_nix_paths_chromium(paths: Union[str, list], channel: Union[str, li
 def _genarate_win_paths_chromium(paths: Union[str, list], channel: Union[str, list] = None):
     """Generate paths for chromium based browsers on windows"""
 
-    paths, channel = _normalize_genarate_paths_chromium(paths, channel)
+    paths, channel = _normalize_genarate_paths_chromium(paths, channel) # type: ignore[arg-type]
     genararated_paths = []
     for chan in channel:
         for path in paths:

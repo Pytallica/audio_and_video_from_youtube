@@ -9,7 +9,7 @@ class TelegramClient:
         self.token = token
         self.base_url = base_url
 
-    def prepare_url(self, method: str):
+    def prepare_url(self, method: str | None):
         result_url = f'{self.base_url}/bot{self.token}/'
         if method is not None:
             result_url += method
